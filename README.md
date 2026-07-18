@@ -72,6 +72,7 @@ pip install tensorflow opencv-python scikit-learn matplotlib tqdm
 3. Run all cells sequentially
 4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras`
 5. TFLite exports: `mobilenet_model.tflite`, `efficientnet_model.tflite`, `labels.txt`
+6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, and inference benchmarks for both models. Share this file for analysis.
 
 ## Known Limitations
 
