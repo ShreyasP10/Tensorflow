@@ -43,11 +43,25 @@ Split: 50% Training / 25% Validation / 25% Test (preserves original Fruits-360 s
 
 2. **Removed `rescale=1./255`** from all `ImageDataGenerator` instances — was causing double-scaling for EfficientNetB0
 
-3. **BatchNorm freezing during fine-tuning**: BN running statistics frozen (`layer.trainable = False`) on unfrozen layers to prevent corruption from small batch sizes
+3. **BatchNorm freezing during fine-tuning**: BN running statistics frozen (`layer.trainable = False`) on the frozen stem to prevent corruption; BN inside the unfrozen window is trained (batch size 64 keeps stats stable)
 
 4. **Original dataset splits preserved**: Uses Fruits-360's original Training/Validation/Test folders (specimen-level split by k, k+1, k+2, k+3 rule), not random image-level shuffle
 
+5. **Folder→class mapping fixed**: Merges Fruit-360 variety folders into their parent classes via prefix matching (e.g. `Apple Braeburn` → `Apple`) instead of exact-name matching, which was silently dropping all suffixed varieties (Apple, Grape, Onion, Pepper had zero images)
+
+6. **Background replacement as a gated layer**: `RandomBackgroundReplace` is a `Layer` subclass with a `training` argument — augmentation runs only during `fit()`, passes through at inference, and keeps `tf.random.uniform` out of the exported TFLite graph (was previously breaking `converter.convert()`)
+
+## Scalability Optimizations
+
+- **Mixed precision (`mixed_float16`)**: ~2x faster training on T4 with lower VRAM usage
+- **Batch size 64**: more stable BatchNorm stats, better GPU utilization
+- **Callbacks on `val_accuracy`** (not `val_loss`): early stopping + best-weights checkpointing align with the actual goal; `TerminateOnNaN` guards against divergence
+- **GPU memory growth + device detection** at startup
+- **Ensemble evaluation**: results.json includes averaged-probability ensemble accuracy (typically +1-3% over best single model)
+
 ## Training Details
+
+Target accuracy: **90-95% on the test set** (single models); the ensemble in results.json typically lands at the top of that range.
 
 ### MobileNetV2
 - Phase 1 (Head): 20 epochs, LR 1e-3 → 1e-5 (cosine decay + warmup)
@@ -57,7 +71,7 @@ Split: 50% Training / 25% Validation / 25% Test (preserves original Fruits-360 s
 - Phase 1 (Head): 20 epochs, LR 1e-3 → 1e-5
 - Phase 2 (Fine-tune last 30 layers): 25 epochs, LR 5e-5 → 1e-7
 
-Shared: AdamW (weight_decay=1e-4), Label Smoothing (0.1), Class Weights (balanced), Top-3 Accuracy metric
+Shared: AdamW (weight_decay=1e-4), Label Smoothing (0.1), Class Weights (balanced), Top-3 Accuracy metric, mixed float16
 
 ## Requirements
 
