@@ -6,16 +6,21 @@ A TensorFlow/Keras project for classifying fruits and vegetables using the Fruit
 
 ```
 Tensorflow/
-├── model.ipynb          # Complete training notebook (Google Colab)
-├── test.md              # Previous evaluation results (pre-fix)
+├── model.ipynb          # Complete training notebook (Google Colab) — 17 code cells + markdown headers
+├── README.md
 ├── .gitignore
-└── CropIQ/              # Dataset subset (Test/Validation images)
-    ├── README.md        # Fruits-360 dataset documentation
-    ├── Test/
-    │   ├── Apple 19/
-    │   └── Apple Braeburn 1/
-    └── Validation/
-        └── apple_pink_lady_1/
+├── .gitattributes       # Git LFS tracking for model artifacts
+├── models/              # Trained artifacts (Git LFS tracked)
+│   ├── final_mobilenet.keras
+│   ├── final_efficientnet.keras
+│   ├── mobilenet_model.tflite
+│   ├── efficientnet_model.tflite
+│   ├── labels.txt
+│   └── results.json
+├── CropIQ/              # Dataset subset (Test/Validation images)
+│   ├── README.md        # Fruits-360 dataset documentation
+│   ├── Test/
+│   └── Validation/
 ```
 
 ## Dataset
@@ -81,18 +86,61 @@ pip install tensorflow opencv-python scikit-learn matplotlib tqdm
 
 ## Usage
 
+### Training (Google Colab)
+
 1. Open `model.ipynb` in Google Colab (GPU runtime)
 2. Upload `CropIQ.zip` to Drive: `MyDrive/CropIQ/CropIQ.zip`
-3. Run the single cell top-to-bottom — it handles everything: extraction, class merging, background download, training both models, evaluation, ensemble, and export
+3. Run cells top-to-bottom (17 code cells with markdown headers) — handles extraction, class merging, background download, training both models, evaluation, ensemble, and export
 4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras` (+ `_finetuned` variants)
 5. TFLite exports: `mobilenet_model.tflite`, `efficientnet_model.tflite`, `labels.txt`
-6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, and ensemble accuracy for both models. Share this file for analysis.
+6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, and ensemble accuracy for both models.
+
+### Model Artifacts
+
+Trained artifacts are stored in `models/` (Git LFS tracked):
+
+```bash
+# After training, copy from Drive to repo:
+cp "/content/drive/MyDrive/CropIQ/*.keras" models/
+cp "/content/drive/MyDrive/CropIQ/*.tflite" models/
+cp "/content/drive/MyDrive/CropIQ/labels.txt" models/
+cp "/content/drive/MyDrive/CropIQ/results.json" models/
+```
+
+Then commit (Git LFS handles large files):
+
+```bash
+git add models/
+git commit -m "Add trained models + artifacts"
+git push
+```
+
+### Android Integration
+
+For the CropIQ Android app, copy only the TFLite model + labels to `app/src/main/assets/`:
+
+```
+app/src/main/assets/
+├── mobilenet_model.tflite      (or efficientnet_model.tflite)
+└── labels.txt
+```
+
+Use the provided `CropIQClassifier` Kotlin class (supports GPU/NNAPI delegates, Flex ops).
+
+### Branch
+
+Active development on `cropiq-android-integration` branch:
+
+```bash
+git checkout cropiq-android-integration
+```
 
 ## Known Limitations
 
 - **Background domain shift**: Training uses random background augmentation; validation/test use original white studio backgrounds. Real-world deployment (phone camera) will have varied backgrounds.
 - **External test set needed**: 100% accuracy on studio photos ≠ real-world performance. Collect phone photos for true evaluation.
-- **EfficientNetB0 LR schedule**: May need independent tuning vs MobileNetV2 recipe
+- **Eggplant class has 0 samples** in current dataset — model cannot predict it. Add Eggplant folders to CropIQ.zip or remove from `TARGET_CLASSES`.
+- **TFLite models require Flex delegate** (`SELECT_TF_OPS`) due to mixed-precision training. For pure TFLite, retrain with `float32` policy.
 
 ## License
 
