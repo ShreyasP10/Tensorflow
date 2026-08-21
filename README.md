@@ -81,12 +81,12 @@ pip install tensorflow opencv-python scikit-learn matplotlib tqdm
 
 ## Usage
 
-1. Open `model.ipynb` in Google Colab
-2. Mount Google Drive with dataset (`CropIQ.zip` containing Fruits-360)
-3. Run all cells sequentially
-4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras`
+1. Open `model.ipynb` in Google Colab (GPU runtime)
+2. Upload `CropIQ.zip` to Drive: `MyDrive/CropIQ/CropIQ.zip`
+3. Run the single cell top-to-bottom — it handles everything: extraction, class merging, background download, training both models, evaluation, ensemble, and export
+4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras` (+ `_finetuned` variants)
 5. TFLite exports: `mobilenet_model.tflite`, `efficientnet_model.tflite`, `labels.txt`
-6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, and inference benchmarks for both models. Share this file for analysis.
+6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, and ensemble accuracy for both models. Share this file for analysis.
 
 ## Known Limitations
 
