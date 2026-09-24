@@ -1,2 +1,33 @@
-/CropIQ
+# Dataset folders & archives
+/CropIQ/
+CropIQ/
+CropIQ.zip
+coco_unlabeled/
+coco_unlabeled.zip
+full_dataset/
+merged_dataset/
+
+# Python & Jupyter cache
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+.idea/
+.vscode/
+
+# Temporary / testing files
 test.md
+*.log
