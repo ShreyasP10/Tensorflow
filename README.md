@@ -19,22 +19,21 @@ Tensorflow/
 │   ├── efficientnet_model_fp16.tflite
 │   ├── labels.txt
 │   ├── labels.json
-│   └── results.json          # includes ensemble + tflite_parity metrics
-├── CropIQ/              # Dataset subset (Test/Validation images)
+│   └── results.json
+├── CropIQ/              # Full Fruits-360 dataset (102,551 images)
 │   ├── README.md        # Fruits-360 dataset documentation
-│   ├── Test/
-│   └── Validation/
+│   ├── Training/
+│   ├── Validation/
+│   └── Test/
 ```
 
 ## Dataset
 
 **Fruits-360** (Version 2026.5.12.0) - 102,551 images across 145 classes (fruits, vegetables, nuts, seeds).
 
-This project uses a **12-class subset** + background:
-- Apple, Banana, Cabbage, Carrot, Cucumber, Grape, Onion, Orange, Papaya, Pepper, Strawberry, Tomato
+This project uses a **13-class subset** + background:
+- Apple, Banana, Cabbage, Carrot, Cucumber, Eggplant, Grape, Onion, Orange, Papaya, Pepper, Strawberry, Tomato
 - Background (from COCO unlabeled2017)
-
-(Eggplant was removed — 0 images in the dataset. 13 outputs total.)
 
 Split: 50% Training / 25% Validation / 25% Test (preserves original Fruits-360 specimen-level splits)
 
@@ -42,30 +41,29 @@ Split: 50% Training / 25% Validation / 25% Test (preserves original Fruits-360 s
 
 | Model | Preprocessing | Parameters |
 |-------|---------------|------------|
-| **MobileNetV2** | `mobilenet_v2.preprocess_input` (→ [-1, 1]) | ~3.5M |
-| **EfficientNetB0** | `efficientnet.preprocess_input` (→ [0, 255] internal) | ~5.3M |
+| **MobileNetV2** | `Rescaling(1./127.5, offset=-1.0)` (→ [-1, 1]) | ~3.5M |
+| **EfficientNetB0** | `EfficientNetPreprocess` (ImageNet torch-style: $(x/255 - \mu)/\sigma$) | ~5.3M |
 
 ## Key Pipeline Fixes Applied
 
-1. **Per-model preprocessing** (critical): Both models now receive raw [0, 255] images from generators. Each model has a `Lambda` preprocessing layer:
-   - MobileNetV2: scales to [-1, 1] via `mobilenet_v2.preprocess_input`
-   - EfficientNetB0: passes through unchanged; model's internal layers handle scaling
+1. **Per-model serializable preprocessing**: Replaced fragile `Lambda` layer function references with serializable layers:
+   - MobileNetV2: scales [0, 255] to [-1, 1] via native `tf.keras.layers.Rescaling(1./127.5, offset=-1.0)`
+   - EfficientNetB0: normalized via serializable `EfficientNetPreprocess` layer implementing exact ImageNet torch-style $(x/255 - \mu)/\sigma$ ($\mu=[0.485, 0.456, 0.406]$, $\sigma=[0.229, 0.224, 0.225]$), separate from internal backbone operations. Prevents deserialization crashes and enables clean TFLite export.
 
-2. **Removed `rescale=1./255`** from all `ImageDataGenerator` instances — was causing double-scaling for EfficientNetB0
+2. **Removed `rescale=1./255`** from all `ImageDataGenerator` instances — was causing double-scaling for models with pipeline normalization.
 
-3. **BatchNorm freezing during fine-tuning**: BN running statistics frozen (`layer.trainable = False`) on the frozen stem to prevent corruption; BN inside the unfrozen window is trained (batch size 64 keeps stats stable)
+3. **Model-specific BatchNorm strategies in fine-tuning**:
+   - MobileNetV2: BN layers in the unfrozen tail are **frozen** (`layer.trainable = False`) to prevent running statistics drift at the low fine-tuning learning rate ($5 \times 10^{-5}$).
+   - EfficientNetB0: BN layers in the unfrozen tail are **trained** (batch size 64 keeps statistics stable, allowing depthwise feature adaptation).
+   - Both models: BN in the early frozen stem remains completely frozen.
 
-4. **Original dataset splits preserved**: Uses Fruits-360's original Training/Validation/Test folders (specimen-level split by k, k+1, k+2, k+3 rule), not random image-level shuffle
+4. **Original dataset splits preserved**: Uses Fruits-360's original Training/Validation/Test folders (specimen-level split by k, k+1, k+2, k+3 rule), not random image-level shuffle.
 
-5. **Folder→class mapping fixed**: Merges Fruit-360 variety folders into their parent classes via prefix matching (e.g. `Apple Braeburn` → `Apple`) instead of exact-name matching, which was silently dropping all suffixed varieties (Apple, Grape, Onion, Pepper had zero images)
+5. **Folder→class mapping fixed with separator normalization**: Merges Fruit-360 variety folders into their parent classes using separator normalization (`low.replace('_', ' ')`) and prefix matching (e.g. `Apple Braeburn 1` / `apple_golden_1` → `Apple`, `eggplant_long_1` → `Eggplant`, `cabbage_white_1` → `Cabbage`), accurately mapping 76 variety folders across all splits without missing multi-word or snake_case classes.
 
-6. **Background replacement as a gated layer**: `RandomBackgroundReplace` is a `Layer` subclass with a `training` argument — augmentation runs only during `fit()`, passes through at inference, and keeps `tf.random.uniform` out of the exported TFLite graph (was previously breaking `converter.convert()`)
+6. **Selective Background Acquisition**: Downloads lightweight annotation JSON (~4.7 MB) and directly fetches 600 background images (~30 MB total instead of full 19 GB zip archive). A `.extraction_complete` sentinel file ensures re-runs skip completed downloads and cleans incomplete attempts.
 
-7. **Verified downloads & extraction**: COCO download uses a verified SSL context (certifi + system-cert fallback, no bypass); both zip extractions go through `safe_extract_member`, which blocks path traversal outside the destination
-
-8. **Empty-class safety**: class weights are computed only over classes present in training data (`np.unique`); the generators cell prints a per-class count table flagging any empty class; `classification_report`/`confusion_matrix` calls pass explicit `labels=` so empty classes render as zero rows instead of crashing
-
-9. **Determinism & coverage**: `random.seed(42)` before the COCO shuffle; `steps_per_epoch`/`validation_steps` use `math.ceil` so partial batches are included; `BG_THRESHOLD` and `FINE_TUNE_LAYERS` are named config constants
+7. **Background replacement as a gated layer**: `RandomBackgroundReplace` is a `Layer` subclass with a `training` argument and `get_config()` — augmentation runs only during `fit()`, passes through at inference, and keeps `tf.random.uniform` out of the exported TFLite graph.
 
 ## Scalability Optimizations
 
@@ -74,7 +72,6 @@ Split: 50% Training / 25% Validation / 25% Test (preserves original Fruits-360 s
 - **Callbacks on `val_accuracy`** (not `val_loss`): early stopping + best-weights checkpointing align with the actual goal; `TerminateOnNaN` guards against divergence
 - **GPU memory growth + device detection** at startup
 - **Ensemble evaluation**: results.json includes averaged-probability ensemble accuracy (typically +1-3% over best single model)
-- **Export verification**: save cell writes `labels.json` (`{index: name}`), exports FP16 TFLite variants (`*_model_fp16.tflite`), and runs a keras-vs-tflite parity check stored as `tflite_parity` in results.json (warns if mean diff > 0.05)
 
 ## Training Details
 
@@ -104,8 +101,8 @@ pip install tensorflow opencv-python scikit-learn matplotlib tqdm
 2. Upload `CropIQ.zip` to Drive: `MyDrive/CropIQ/CropIQ.zip`
 3. Run cells top-to-bottom (17 code cells with markdown headers) — handles extraction, class merging, background download, training both models, evaluation, ensemble, and export
 4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras` (+ `_finetuned` variants)
-5. TFLite exports: `mobilenet_model.tflite` (+ `_fp16` variant), `efficientnet_model.tflite` (+ `_fp16` variant), `labels.txt`, `labels.json`
-6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, ensemble accuracy, and `tflite_parity` metrics for both models.
+5. TFLite exports: `mobilenet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `efficientnet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `labels.txt`, `labels.json` (ordered JSON array where array index = class index)
+6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, ensemble accuracy, and `tflite_parity` metrics for both standard and FP16 models.
 
 ### Model Artifacts
 
@@ -135,10 +132,14 @@ For the CropIQ Android app, copy only the TFLite model + labels to `app/src/main
 ```
 app/src/main/assets/
 ├── mobilenet_model.tflite      (or efficientnet_model.tflite, or _fp16 variants)
-├── labels.txt                  (or labels.json — {index: name} mapping)
+└── labels.txt                  (or labels.json — ordered JSON array: labels[index])
 ```
 
-Use the provided `CropIQClassifier` Kotlin class (supports GPU/NNAPI delegates, Flex ops).
+Use the provided `CropIQClassifier` Kotlin class (supports GPU/NNAPI delegates, Flex ops):
+```kotlin
+// labels.json is a JSON array: ["Apple", "Banana", ...]
+val className = labelsJsonArray.getString(predictedIndex)
+```
 
 ### Branch
 
@@ -152,7 +153,7 @@ git checkout cropiq-android-integration
 
 - **Background domain shift**: Training uses random background augmentation; validation/test use original white studio backgrounds. Real-world deployment (phone camera) will have varied backgrounds.
 - **External test set needed**: 100% accuracy on studio photos ≠ real-world performance. Collect 50–100 phone photos under natural conditions as a holdout set before trusting deployment metrics.
-- **TFLite models require Flex delegate** (`SELECT_TF_OPS`) due to mixed-precision training. For pure TFLite, retrain with `float32` policy. INT8 quantization deferred — needs uint8 app-contract change + re-measured accuracy; use FP16 variants first.
+- **TFLite models require Flex delegate** (`SELECT_TF_OPS`) due to mixed-precision training. For pure TFLite, retrain with `float32` policy.
 - **App-side gating required**: never display predictions below ~50% confidence; treat `Background` top-1 as "no fruit detected," not as an answer.
 
 ## License
