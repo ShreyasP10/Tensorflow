@@ -6,11 +6,12 @@ A TensorFlow/Keras project for classifying fruits and vegetables using the Fruit
 
 ```
 Tensorflow/
-├── model.ipynb          # Complete training notebook (Google Colab) — 17 code cells + markdown headers
+├── model.ipynb                  # Complete training notebook (Google Colab)
+├── TFLITE_DEVELOPER_REFERENCE.md # Complete 23-point architecture & deployment guide
 ├── README.md
 ├── .gitignore
-├── .gitattributes       # Git LFS tracking for model artifacts
-├── models/              # Trained artifacts (Git LFS tracked)
+├── .gitattributes               # Git LFS tracking for model artifacts
+├── models/                      # Trained artifacts (Git LFS tracked)
 │   ├── final_mobilenet.keras
 │   ├── final_efficientnet.keras
 │   ├── mobilenet_model.tflite
@@ -19,9 +20,10 @@ Tensorflow/
 │   ├── efficientnet_model_fp16.tflite
 │   ├── labels.txt
 │   ├── labels.json
+│   ├── class_indices.json
 │   └── results.json
-├── CropIQ/              # Full Fruits-360 dataset (102,551 images)
-│   ├── README.md        # Fruits-360 dataset documentation
+├── CropIQ/                      # Full Fruits-360 dataset (102,551 images)
+│   ├── README.md                # Fruits-360 dataset documentation
 │   ├── Training/
 │   ├── Validation/
 │   └── Test/
@@ -85,7 +87,12 @@ Target accuracy: **90-95% on the test set** (single models); the ensemble in res
 - Phase 1 (Head): 20 epochs, LR 1e-3 → 1e-5
 - Phase 2 (Fine-tune last 30 layers): 25 epochs, LR 5e-5 → 1e-7
 
-Shared: AdamW (weight_decay=1e-4), Label Smoothing (0.1), Class Weights (balanced), Top-3 Accuracy metric, mixed float16
+## 📖 Developer Reference & Architecture Guide
+
+For deep-dive documentation on the architectural principles, edge constraints, and conversion mechanics used across this pipeline, see:
+👉 **[TFLITE_DEVELOPER_REFERENCE.md](TFLITE_DEVELOPER_REFERENCE.md)**
+
+It documents all 23 core engineering rules across Foundation, Data Quality, Transfer Learning, Mixed Precision, Export, Android Integration, and Ops.
 
 ## Requirements
 
@@ -114,6 +121,7 @@ cp "/content/drive/MyDrive/CropIQ/*.keras" models/
 cp "/content/drive/MyDrive/CropIQ/*.tflite" models/
 cp "/content/drive/MyDrive/CropIQ/labels.txt" models/
 cp "/content/drive/MyDrive/CropIQ/labels.json" models/
+cp "/content/drive/MyDrive/CropIQ/class_indices.json" models/
 cp "/content/drive/MyDrive/CropIQ/results.json" models/
 ```
 
