@@ -102,14 +102,33 @@ pip install tensorflow opencv-python scikit-learn matplotlib tqdm
 
 ## Usage
 
-### Training (Google Colab)
+### Local Execution (`local-run` branch)
 
-1. Open `model.ipynb` in Google Colab (GPU runtime)
-2. Upload `CropIQ.zip` to Drive: `MyDrive/CropIQ/CropIQ.zip`
-3. Run cells top-to-bottom (17 code cells with markdown headers) — handles extraction, class merging, background download, training both models, evaluation, ensemble, and export
-4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras` (+ `_finetuned` variants)
-5. TFLite exports: `mobilenet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `efficientnet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `labels.txt`, `labels.json` (ordered JSON array where array index = class index)
-6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, ensemble accuracy, and `tflite_parity` metrics for both standard and FP16 models.
+The `local-run` branch is configured to run directly on your local workstation (Windows, macOS, Linux with GPU or CPU):
+
+1. Clone and switch to the `local-run` branch:
+   ```bash
+   git checkout local-run
+   ```
+2. Install dependencies:
+   ```bash
+   pip install tensorflow opencv-python scikit-learn matplotlib tqdm certifi
+   ```
+3. Open `model.ipynb` in VS Code, JupyterLab, or PyCharm.
+4. Run cells top-to-bottom:
+   - **Dataset**: Automatically detects the local `CropIQ/` folder (or `CropIQ.zip` in root).
+   - **Background Class**: Automatically downloads COCO unlabeled2017 annotations (~4.7 MB) and 600 non-food background images (~30 MB) from the web directly into `./coco_unlabeled/`.
+   - **Hardware**: Dynamically selects `mixed_float16` if an NVIDIA GPU is available, or falls back to stable `float32` on CPU.
+   - **Output**: Models and artifacts are saved directly into the local `models/` directory.
+
+### Training on Google Colab
+
+1. Open `model.ipynb` in Google Colab (GPU runtime).
+2. Upload `CropIQ.zip` to Drive: `MyDrive/CropIQ/CropIQ.zip`.
+3. Run cells top-to-bottom — the notebook auto-detects Colab, mounts Drive, extracts data, and exports trained artifacts.
+4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras` (+ `_finetuned` variants).
+5. TFLite exports: `mobilenet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `efficientnet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `labels.txt`, `labels.json` (ordered JSON array), and `class_indices.json`.
+6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, ensemble accuracy, and `tflite_parity` metrics.
 
 ### Model Artifacts
 
@@ -149,13 +168,11 @@ Use the provided `CropIQClassifier` Kotlin class (supports GPU/NNAPI delegates, 
 val className = labelsJsonArray.getString(predictedIndex)
 ```
 
-### Branch
+### Branches
 
-Active development on `cropiq-android-integration` branch:
-
-```bash
-git checkout cropiq-android-integration
-```
+- **`local-run`**: Configured for local development and workstation training (local dataset detection, web-based background download, CPU/GPU auto-configuration).
+- **`cropiq-android-integration`**: Production-ready pipeline and audited Android TFLite artifacts.
+- **`main`**: Base repository branch.
 
 ## Known Limitations
 
