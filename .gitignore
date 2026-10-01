@@ -6,6 +6,7 @@ coco_unlabeled/
 coco_unlabeled.zip
 full_dataset/
 merged_dataset/
+*.zip
 
 # Python & Jupyter cache
 __pycache__/
