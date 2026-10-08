@@ -1,216 +1,192 @@
 # CropIQ: Fruit & Vegetable Classification
 
-A TensorFlow/Keras project for classifying fruits and vegetables using the Fruits-360 dataset. Trains and evaluates MobileNetV2 and EfficientNetB0 models with proper per-model preprocessing.
+A production-ready TensorFlow/Keras computer vision project for classifying fruits and vegetables using the Fruits-360 dataset. Implements transfer learning with **MobileNetV2** and **EfficientNetB0**, canonical `tf.data` input pipelines, in-model GPU data augmentation, and exports 100% pure `TFLITE_BUILTINS` and full INT8 quantized edge models.
+
+---
 
 ## Project Structure
 
 ```
 Tensorflow/
-├── model.ipynb                  # Complete training notebook (Google Colab)
-├── TFLITE_DEVELOPER_REFERENCE.md # Complete 23-point architecture & deployment guide
+├── model.ipynb                   # Complete training & export notebook (Local & Colab compatible)
+├── TFLITE_DEVELOPER_REFERENCE.md  # Complete 23-point architecture & edge deployment guide
 ├── README.md
 ├── .gitignore
-├── .gitattributes               # Git LFS tracking for model artifacts
-├── models/                      # Trained artifacts (Git LFS tracked)
+├── .gitattributes                # Git LFS tracking for trained model artifacts
+├── models/                       # Trained artifacts (Git LFS tracked)
 │   ├── final_mobilenet.keras
 │   ├── final_efficientnet.keras
-│   ├── mobilenet_model.tflite
-│   ├── mobilenet_model_fp16.tflite
-│   ├── efficientnet_model.tflite
-│   ├── efficientnet_model_fp16.tflite
-│   ├── labels.txt
-│   ├── labels.json
-│   ├── class_indices.json
-│   └── results.json
-├── CropIQ/                      # Full Fruits-360 dataset (102,551 images)
-│   ├── README.md                # Fruits-360 dataset documentation
+│   ├── mobilenet_model.tflite          # 100% Pure TFLite Builtins (~3.1 MB)
+│   ├── mobilenet_model_fp16.tflite     # FP16 Quantized (~2.5 MB)
+│   ├── mobilenet_model_int8.tflite     # Full INT8 Quantized (~3.5 MB)
+│   ├── efficientnet_model.tflite       # 100% Pure TFLite Builtins (~4.8 MB)
+│   ├── efficientnet_model_fp16.tflite  # FP16 Quantized (~4.8 MB)
+│   ├── efficientnet_model_int8.tflite  # Full INT8 Quantized (~5.2 MB)
+│   ├── labels.txt                      # Newline-separated class labels
+│   ├── labels.json                     # JSON array of ordered classes
+│   ├── class_indices.json              # Class name to integer index mapping
+│   └── results.json                    # Full evaluation metrics & camera input contract
+├── CropIQ/                       # Source Fruits-360 dataset (102,551 images)
+│   ├── README.md
 │   ├── Training/
 │   ├── Validation/
 │   └── Test/
+└── merged_dataset/               # Preprocessed 13-class + Background split directory
+    ├── Training/
+    ├── Validation/
+    └── Test/
 ```
+
+---
 
 ## Dataset
 
-**Fruits-360** (Version 2026.5.12.0) - 102,551 images across 145 classes (fruits, vegetables, nuts, seeds).
+**Fruits-360** (Version 2026.5.12.0) - 102,551 images across 145 varieties.
 
-This project uses a **13-class subset** + background:
-- Apple, Banana, Cabbage, Carrot, Cucumber, Eggplant, Grape, Onion, Orange, Papaya, Pepper, Strawberry, Tomato
-- Background (from COCO unlabeled2017)
+This project trains on a **13-class subset** + background:
+- **13 Produce Classes**: Apple, Banana, Cabbage, Carrot, Cucumber, Eggplant, Grape, Onion, Orange, Papaya, Pepper, Strawberry, Tomato
+- **Background Class**: Non-produce background images sourced directly from COCO unlabeled2017
 
-Split: 50% Training / 25% Validation / 25% Test (preserves original Fruits-360 specimen-level splits)
+**Splits**: Preserves Fruits-360 specimen-level partition across Training, Validation, and Test sets (no data leakage).
+
+---
 
 ## Models Trained
 
-| Model | Preprocessing | Parameters |
-|-------|---------------|------------|
-| **MobileNetV2** | `Rescaling(1./127.5, offset=-1.0)` (→ [-1, 1]) | ~3.5M |
-| **EfficientNetB0** | `EfficientNetPreprocess` (ImageNet torch-style: $(x/255 - \mu)/\sigma$) | ~5.3M |
+| Model | Internal Preprocessing | Input Pixel Contract | Parameters | Pure TFLite Size | Full INT8 Size |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **MobileNetV2** | `Rescaling(1./127.5, offset=-1.0)` | Raw `[0, 255]` float32 RGB | ~3.5M | ~3.12 MB | ~3.5 MB |
+| **EfficientNetB0** | Native Backbone `Rescaling(1./255.0)` | Raw `[0, 255]` float32 RGB | ~5.3M | ~4.87 MB | ~5.2 MB |
 
-## Key Pipeline Fixes Applied
+---
 
-1. **Per-model serializable preprocessing**: Replaced fragile `Lambda` layer function references with serializable layers:
-   - MobileNetV2: scales [0, 255] to [-1, 1] via native `tf.keras.layers.Rescaling(1./127.5, offset=-1.0)`
-   - EfficientNetB0: normalized via serializable `EfficientNetPreprocess` layer implementing exact ImageNet torch-style $(x/255 - \mu)/\sigma$ ($\mu=[0.485, 0.456, 0.406]$, $\sigma=[0.229, 0.224, 0.225]$), separate from internal backbone operations. Prevents deserialization crashes and enables clean TFLite export.
+## Key Pipeline Fixes & Architecture Highlights
 
-2. **Removed `rescale=1./255`** from all `ImageDataGenerator` instances — was causing double-scaling for models with pipeline normalization.
+1. **Canonical `tf.data` Input Pipeline**:
+   Replaced deprecated `ImageDataGenerator` with `tf.keras.utils.image_dataset_from_directory`. Features memory caching (`.cache()`) and background asynchronous prefetching (`.prefetch(buffer_size=tf.data.AUTOTUNE)`).
 
-3. **Model-specific BatchNorm strategies in fine-tuning**:
-   - MobileNetV2: BN layers in the unfrozen tail are **frozen** (`layer.trainable = False`) to prevent running statistics drift at the low fine-tuning learning rate ($5 \times 10^{-5}$).
-   - EfficientNetB0: BN layers in the unfrozen tail are **trained** (batch size 64 keeps statistics stable, allowing depthwise feature adaptation).
-   - Both models: BN in the early frozen stem remains completely frozen.
+2. **In-Model GPU Data Augmentation**:
+   Image augmentations (`RandomFlip`, `RandomRotation`, `RandomZoom`, `RandomTranslation`) are implemented as native Keras preprocessing layers. They execute in-graph on the GPU during training and automatically act as an identity pass-through during inference and evaluation.
 
-4. **Original dataset splits preserved**: Uses Fruits-360's original Training/Validation/Test folders (specimen-level split by k, k+1, k+2, k+3 rule), not random image-level shuffle.
+3. **Unified Input Pixel Contract & Zero Double-Normalization**:
+   Stripped all external preprocessing layers that previously caused double-normalization. Both MobileNetV2 and EfficientNetB0 handle rescaling internally. External callers (Android CameraX, web APIs, inference scripts) feed raw `[0, 255]` float32 RGB pixels.
 
-5. **Folder→class mapping fixed with separator normalization**: Merges Fruit-360 variety folders into their parent classes using separator normalization (`low.replace('_', ' ')`) and prefix matching (e.g. `Apple Braeburn 1` / `apple_golden_1` → `Apple`, `eggplant_long_1` → `Eggplant`, `cabbage_white_1` → `Cabbage`), accurately mapping 76 variety folders across all splits without missing multi-word or snake_case classes.
+4. **100% Pure `TFLITE_BUILTINS` Export (Zero Flex Ops)**:
+   Dedicated inference serving models strip training-only data augmentation layers prior to TFLite conversion. Both MobileNetV2 and EfficientNetB0 convert into standard `TFLITE_BUILTINS` without any `SELECT_TF_OPS` Flex dependencies.
 
-6. **Selective Background Acquisition**: Downloads lightweight annotation JSON (~4.7 MB) and directly fetches 600 background images (~30 MB total instead of full 19 GB zip archive). A `.extraction_complete` sentinel file ensures re-runs skip completed downloads and cleans incomplete attempts.
+5. **Full INT8 Post-Training Quantization (PTQ)**:
+   Includes a representative dataset generator to quantize weights and activations to INT8. Provides maximum acceleration on mobile NNAPI and edge NPUs while preserving classification accuracy.
 
-7. **Background replacement as a gated layer**: `RandomBackgroundReplace` is a `Layer` subclass with a `training` argument and `get_config()` — augmentation runs only during `fit()`, passes through at inference, and keeps `tf.random.uniform` out of the exported TFLite graph.
+6. **Variety-to-Class Mapping & Case-Insensitive Matching**:
+   Normalized folder matching (`.lower().strip().replace('_', ' ')`) accurately maps all 76 Fruits-360 variety folders into the 13 target parent classes (including `eggplant_long_1` → `Eggplant`, restoring 160 previously skipped training images). Varietal file copies prepend source folder names (`f"{entry.name}_{f_entry.name}"`) to prevent silent overwrite collisions.
 
-## Scalability Optimizations
+7. **Stratified Multi-Class Parity Verification**:
+   Validates numerical parity ($\text{MAE} < 0.01$) between Keras and TFLite across a stratified sample covering all 13 produce classes and background, rather than testing a single batch of one class.
 
-- **Mixed precision (`mixed_float16`)**: ~2x faster training on T4 with lower VRAM usage
-- **Batch size 64**: more stable BatchNorm stats, better GPU utilization
-- **Callbacks on `val_accuracy`** (not `val_loss`): early stopping + best-weights checkpointing align with the actual goal; `TerminateOnNaN` guards against divergence
-- **GPU memory growth + device detection** at startup
-- **Ensemble evaluation**: results.json includes averaged-probability ensemble accuracy (typically +1-3% over best single model)
+8. **Data Integrity & Sentinel Checks**:
+   Automatically purges `merged_dataset/` before rebuilding to prevent stale split contamination. Corrupt and truncated images are removed with `PIL.Image.verify()`. Hard assertions halt execution if any class has 0 images in any split.
 
-## Training Details
+---
 
-Target accuracy: **90-95% on the test set** (single models); the ensemble in results.json typically lands at the top of that range.
+## Scalability & Training Strategies
 
-### MobileNetV2
-- Phase 1 (Head): 20 epochs, LR 1e-3 → 1e-5 (cosine decay + warmup)
-- Phase 2 (Fine-tune last 30 layers): 20 epochs, LR 5e-5 → 1e-6
+- **Mixed Precision (`mixed_float16`)**: Automatically detected and enabled on supported GPUs for ~2x faster training; falls back cleanly to `float32` on CPU.
+- **BatchNorm Freezing**: Backbone layers use `base_model(x, training=False)` to keep ImageNet running mean and variance frozen throughout transfer learning and fine-tuning.
+- **Learning Rate Warmup & Cosine Decay**: Warmup cosine decay callback stabilizes initial convergence and smoothly anneals the learning rate down to a specified floor.
+- **Class Weights**: Inferred dynamically with `compute_class_weight('balanced', ...)` to balance smaller classes (Carrot, Cabbage, Eggplant) against large classes (Apple, Tomato).
 
-### EfficientNetB0
-- Phase 1 (Head): 20 epochs, LR 1e-3 → 1e-5
-- Phase 2 (Fine-tune last 30 layers): 25 epochs, LR 5e-5 → 1e-7
+---
 
-## 📖 Developer Reference & Architecture Guide
+## Developer Reference & Architecture Guide
 
-For deep-dive documentation on the architectural principles, edge constraints, and conversion mechanics used across this pipeline, see:
+For deep-dive documentation on all 23 core engineering principles across Foundation, Data Quality, Transfer Learning, Mixed Precision, Export, Android Integration, and Ops:
 👉 **[TFLITE_DEVELOPER_REFERENCE.md](TFLITE_DEVELOPER_REFERENCE.md)**
 
-It documents all 23 core engineering rules across Foundation, Data Quality, Transfer Learning, Mixed Precision, Export, Android Integration, and Ops.
+---
 
 ## Requirements
 
 ```bash
-pip install tensorflow opencv-python scikit-learn matplotlib tqdm certifi gdown
+pip install tensorflow opencv-python scikit-learn matplotlib tqdm certifi gdown pillow
 ```
+
+---
 
 ## Usage
 
-### 💻 Local Execution (`local-run` branch)
+### Local Workstation Execution (`local-run` branch)
 
-The `local-run` branch is designed to run directly on your local workstation (Windows, macOS, Linux with NVIDIA GPU or CPU).
+The `local-run` branch is preconfigured to run locally (Windows, macOS, Linux with CPU or GPU).
 
-#### Step 1: Switch to `local-run` Branch
+#### 1. Environment Setup
 ```bash
+# Clone and switch to local-run branch
+git clone https://github.com/ShreyasP10/Tensorflow.git
+cd Tensorflow
 git checkout local-run
-```
 
-#### Step 2: Set Up Environment & Install Dependencies
-Create and activate an isolated virtual environment (recommended):
-```bash
-# Windows (PowerShell / CMD)
+# Create and activate virtual environment
 python -m venv venv
+# Windows:
 venv\Scripts\activate
-
-# macOS / Linux
-python3 -m venv venv
+# macOS / Linux:
 source venv/bin/activate
 
-# Install required dependencies
-pip install tensorflow opencv-python scikit-learn matplotlib tqdm certifi gdown
+# Install dependencies
+pip install tensorflow opencv-python scikit-learn matplotlib tqdm certifi gdown pillow
 ```
 
-#### Step 3: Dataset Handling (Zero Manual Setup Required)
-You have two options for the dataset:
-- **Automatic Cloud Download (Default)**: Cell 1 and Cell 3 are preconfigured with the Google Drive link (`GDRIVE_DATASET_ID`). On fresh machines without the dataset, it automatically downloads `CropIQ.zip` via `gdown` and extracts it into `./full_dataset/`.
-- **Existing Local Dataset**: If you already have the `CropIQ/` folder (or `CropIQ.zip`) in the project root, the notebook detects it automatically and skips the download.
+#### 2. Dataset Setup
+- **Existing Local Dataset**: If `CropIQ/` (or `CropIQ.zip`) exists in the project root, the notebook detects it automatically.
+- **Google Drive Auto-Download**: If missing, Cell 1 and Cell 3 use `gdown` to download `CropIQ.zip` directly into the project directory via `GDRIVE_DATASET_ID`.
 
-#### Step 4: Open and Run the Notebook
-Launch your preferred Jupyter environment:
-```bash
-jupyter notebook model.ipynb
-# or open in VS Code / PyCharm / Cursor and select your Python kernel
-```
+#### 3. Run the Notebook
+Open `model.ipynb` in VS Code, JupyterLab, or Cursor and execute cells sequentially:
+- **Cell 1**: Configures determinism (seed 42), local paths (`./models`), and GPU/CPU precision.
+- **Cell 3**: Resolves or auto-downloads and extracts `CropIQ.zip`.
+- **Cell 5**: Partitions varieties into parent classes inside `./merged_dataset/` with corrupt image filtering.
+- **Cell 7**: Downloads lightweight COCO annotation JSON (~4.7 MB) and 600 background images (~30 MB) into `./coco_unlabeled/`.
+- **Cell 9**: Builds native `tf.data` datasets with caching and prefetching.
+- **Cells 13–19**: Builds and trains MobileNetV2 and EfficientNetB0 (head training + fine-tuning).
+- **Cells 20–29**: Evaluates models, verifies multi-class parity, and exports all TFLite models and metadata into `./models/`.
 
-Run all cells top-to-bottom:
-1. **Cell 1**: Automatically detects local execution, disables Colab Drive mounting, points outputs to `./models/`, sets global RNG seeds (42), and configures GPU vs CPU (`mixed_float16` on GPU, standard `float32` on CPU).
-2. **Cell 3**: Resolves or auto-downloads and extracts `CropIQ.zip`.
-3. **Cell 5**: Discovers variety folders, normalizes folder separators (spaces and underscores), and partitions into target classes.
-4. **Cell 7**: Automatically fetches COCO unlabeled2017 annotations (~4.7 MB) and 600 background images (~30 MB) from the web directly into `./coco_unlabeled/`.
-5. **Cells 13–19**: Builds and trains MobileNetV2 and EfficientNetB0 (head warmup + backbone fine-tuning).
-6. **Cells 20–29**: Evaluates models, verifies numerical TFLite parity ($\text{MAE} < 0.01$), and saves all artifacts directly into `./models/`:
-   - `final_mobilenet.keras` / `mobilenet_model.tflite` / `mobilenet_model_fp16.tflite`
-   - `final_efficientnet.keras` / `efficientnet_model.tflite` / `efficientnet_model_fp16.tflite`
-   - `labels.json` (ordered JSON array) / `labels.txt` / `class_indices.json`
-   - `results.json`
+---
 
-### Training on Google Colab
+### Google Colab Execution
 
-1. Open `model.ipynb` in Google Colab (GPU runtime).
-2. Upload `CropIQ.zip` to Drive: `MyDrive/CropIQ/CropIQ.zip`.
-3. Run cells top-to-bottom — the notebook auto-detects Colab, mounts Drive, extracts data, and exports trained artifacts.
-4. Models saved to Drive: `best_mobilenet.keras`, `best_efficientnet.keras` (+ `_finetuned` variants).
-5. TFLite exports: `mobilenet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `efficientnet_model.tflite` (+ `_fp16` variant with `SELECT_TF_OPS`), `labels.txt`, `labels.json` (ordered JSON array), and `class_indices.json`.
-6. **Results file**: `results.json` — contains test accuracy, per-class precision/recall/F1, confusion matrices, training history, inference benchmarks, ensemble accuracy, and `tflite_parity` metrics.
+1. Open `model.ipynb` in Google Colab (select T4 GPU runtime).
+2. Upload `CropIQ.zip` to your Google Drive at `MyDrive/CropIQ/CropIQ.zip`.
+3. Run cells top-to-bottom. The notebook detects Colab, mounts Google Drive, and exports models to `/content/drive/MyDrive/CropIQ/`.
 
-### Model Artifacts
+---
 
-Trained artifacts are stored in `models/` (Git LFS tracked):
+### Android CameraX Integration
 
-```bash
-# After training, copy from Drive to repo:
-cp "/content/drive/MyDrive/CropIQ/*.keras" models/
-cp "/content/drive/MyDrive/CropIQ/*.tflite" models/
-cp "/content/drive/MyDrive/CropIQ/labels.txt" models/
-cp "/content/drive/MyDrive/CropIQ/labels.json" models/
-cp "/content/drive/MyDrive/CropIQ/class_indices.json" models/
-cp "/content/drive/MyDrive/CropIQ/results.json" models/
-```
-
-Then commit (Git LFS handles large files):
-
-```bash
-git add models/
-git commit -m "Add trained models + artifacts"
-git push
-```
-
-### Android Integration
-
-For the CropIQ Android app, copy only the TFLite model + labels to `app/src/main/assets/`:
+For the CropIQ Android app, copy the exported model (`mobilenet_model.tflite` or `mobilenet_model_int8.tflite`) and `labels.json` into `app/src/main/assets/`:
 
 ```
 app/src/main/assets/
-├── mobilenet_model.tflite      (or efficientnet_model.tflite, or _fp16 variants)
-└── labels.txt                  (or labels.json — ordered JSON array: labels[index])
+├── mobilenet_model.tflite          (or mobilenet_model_int8.tflite)
+└── labels.json
 ```
 
-Use the provided `CropIQClassifier` Kotlin class (supports GPU/NNAPI delegates, Flex ops):
-```kotlin
-// labels.json is a JSON array: ["Apple", "Banana", ...]
-val className = labelsJsonArray.getString(predictedIndex)
-```
+#### Camera Frame Input Contract:
+- **Tensor Shape**: `[1, 224, 224, 3]`
+- **Color Format**: RGB
+- **Pixel Values**: Raw `[0.0, 255.0]` float32 (the model normalizes internally)
+- **Aspect Ratio**: Center-crop 1:1 before resizing to 224x224
+- **Runtime**: Standard TensorFlow Lite runtime with GPU or NNAPI delegate (zero Flex delegate required)
 
-### Branches
+---
 
-- **`local-run`**: Configured for local development and workstation training (local dataset detection, web-based background download, CPU/GPU auto-configuration).
-- **`cropiq-android-integration`**: Production-ready pipeline and audited Android TFLite artifacts.
-- **`main`**: Base repository branch.
+## Known Limitations & Best Practices
 
-## Known Limitations
+- **White Studio vs. Real-World Backgrounds**: Fruits-360 images feature controlled studio backgrounds. In real-world camera usage, confidence gating (threshold $\ge 60\%$) and treating the `Background` class as "No item detected" is required.
+- **Holdout Validation**: Validate exported models with a test set of 50–100 natural smartphone camera photos before full field deployment.
 
-- **Background domain shift**: Training uses random background augmentation; validation/test use original white studio backgrounds. Real-world deployment (phone camera) will have varied backgrounds.
-- **External test set needed**: 100% accuracy on studio photos ≠ real-world performance. Collect 50–100 phone photos under natural conditions as a holdout set before trusting deployment metrics.
-- **TFLite models require Flex delegate** (`SELECT_TF_OPS`) due to mixed-precision training. For pure TFLite, retrain with `float32` policy.
-- **App-side gating required**: never display predictions below ~50% confidence; treat `Background` top-1 as "no fruit detected," not as an answer.
+---
 
 ## License
 
-Dataset: CC BY-SA 4.0 (Mihai Oltean, Fruits-360)
-Code: MIT License
+- Dataset: CC BY-SA 4.0 (Mihai Oltean, Fruits-360)
+- Code: MIT License

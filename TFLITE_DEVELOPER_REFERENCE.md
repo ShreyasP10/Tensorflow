@@ -57,14 +57,14 @@ Preprocessing **must live inside the model graph**, not in data loaders or clien
 | **Pipeline Rescaling** | `ImageDataGenerator(rescale=1./255)` | Exported TFLite expects `[0, 1]`. Phone camera feeds `[0, 255]` → Garbage predictions. | ❌ **Broken** |
 | **Lambda Layer** | `Lambda(mobilenet_v2.preprocess_input)` | Model cannot be reloaded without custom scope; TFLite converter crashes. | ❌ **Broken** |
 | **Native Rescaling** | `Rescaling(1./127.5, offset=-1.0)` | Native TFLite kernel, serializable, mobile apps feed raw `[0, 255]`. | ✅ **Correct** |
-| **Custom Layer** | `EfficientNetPreprocess(Layer)` | Full ImageNet `(x/255 - μ)/σ` support with `get_config()` / `from_config()`. | ✅ **Correct** |
+| **Backbone Internal** | Native Keras Backbone Rescaling | Built directly into `EfficientNetB0` (`Rescaling(1./255.0)` + norm). No external wrapper needed. | ✅ **Correct** |
 
 ### Per-Architecture Normalization Contracts
 
 | Architecture | Target Range | Mathematical Formula | Keras Implementation |
 | :--- | :--- | :--- | :--- |
 | **MobileNetV2 / V3** | `[-1.0, 1.0]` | $x / 127.5 - 1.0$ | `layers.Rescaling(1./127.5, offset=-1.0)` |
-| **EfficientNet (B0–B7)** | ImageNet std | $(x / 255.0 - \mu) / \sigma$ | Subclassed `EfficientNetPreprocess` |
+| **EfficientNet (B0–B7)** | ImageNet std | Native Backbone `(x/255.0 - μ)/σ` | Handled internally in Keras backbone |
 | **ResNet50 / VGG** | Mean-subtracted | $x_{\text{BGR}} - [103.9, 116.8, 123.7]$ | Custom Caffe-style Layer |
 | **InceptionV3** | `[-1.0, 1.0]` | $x / 127.5 - 1.0$ | `layers.Rescaling(1./127.5, offset=-1.0)` |
 
@@ -237,20 +237,36 @@ Before launching training in interactive or preemptible cloud environments:
 ---
 
 ## 📦 13. TFLite Conversion Protocol
-*Flex ops, standard export, and FP16.*
+*Clean inference serving model, pure TFLITE_BUILTINS, FP16, and INT8 PTQ.*
+
+To ensure mobile models run at maximum speed with zero Flex (`SELECT_TF_OPS`) dependencies:
+1. Extract a **clean inference serving model** that strips training-only augmentation layers.
+2. Ensure the output layer uses `dtype='float32'`.
+3. Convert with `TFLITE_BUILTINS` for 100% pure edge-accelerated compatibility:
 
 ```python
-converter = tf.lite.TFLiteConverter.from_keras_model(model)
-converter.optimizations = [tf.lite.Optimize.DEFAULT]
-converter.target_spec.supported_ops = [
-    tf.lite.OpsSet.TFLITE_BUILTINS,
-    tf.lite.OpsSet.SELECT_TF_OPS    # Required for mixed-precision cast ops
-]
-tflite_model = converter.convert()
-```
+# Build clean serving model (stripping GPU data augmentation)
+serving_inputs = tf.keras.Input(shape=(224, 224, 3), name='image')
+x = trained_model.get_layer('mobilenet_rescale')(serving_inputs)
+x = trained_model.get_layer('mobilenetv2_backbone')(x, training=False)
+x = trained_model.get_layer('gap')(x)
+x = trained_model.get_layer('fc1')(x)
+serving_outputs = trained_model.get_layer('predictions')(x)
+serving_model = tf.keras.Model(inputs=serving_inputs, outputs=serving_outputs)
 
-> [!WARNING]
-> **FP16 Parity**: If the standard converter requires `SELECT_TF_OPS`, the **FP16 converter must also include `SELECT_TF_OPS`**. Omitting it from FP16 export causes conversion failures.
+# 1. Standard Pure TFLite (Zero Flex Ops)
+converter = tf.lite.TFLiteConverter.from_keras_model(serving_model)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+tflite_model = converter.convert()
+
+# 2. Full INT8 Post-Training Quantization
+int8_conv = tf.lite.TFLiteConverter.from_keras_model(serving_model)
+int8_conv.optimizations = [tf.lite.Optimize.DEFAULT]
+int8_conv.representative_dataset = representative_data_gen
+int8_conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8, tf.lite.OpsSet.TFLITE_BUILTINS]
+int8_model = int8_conv.convert()
+```
 
 ---
 
@@ -258,11 +274,11 @@ tflite_model = converter.convert()
 
 | Quantization Mode | File Size | Latency Gain | Target Hardware | Flex Ops Required? |
 | :--- | :--- | :--- | :--- | :--- |
-| **Float32 (Baseline)** | 100% (~14 MB) | 1.0× | CPU / GPU | Yes (if mixed-precision) |
-| **FP16** | 50% (~7 MB) | 1.2× – 1.8× | Mobile GPU Delegate | Yes |
-| **Full INT8** | 25% (~3.5 MB) | 2.5× – 4.0× | Edge TPU / DSP / CPU | **No** (pure TFLite builtins) |
+| **Float32 (Serving)** | 100% (~3.1 MB MN / ~4.8 MB EF) | 1.0× | Mobile CPU / GPU | **No** (100% pure builtins) |
+| **FP16** | ~80% (~2.5 MB MN / ~4.8 MB EF) | 1.2× – 1.8× | Mobile GPU Delegate | **No** (pure builtins) |
+| **Full INT8** | ~3.5 MB MN / ~5.2 MB EF | 2.5× – 4.0× | Edge TPU / NNAPI / DSP | **No** (pure builtins) |
 
-*Full INT8 requires a representative calibration dataset generator of 100–200 batches.*
+*Full INT8 requires a representative calibration dataset generator of 50–100 samples.*
 
 ---
 
